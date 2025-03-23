@@ -1,4 +1,3 @@
-import { useState, useEffect } from "react";
 import { Stack } from "expo-router";
 import "react-native-reanimated";
 import { Text } from "react-native";

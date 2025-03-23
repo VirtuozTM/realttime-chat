@@ -112,9 +112,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   tabLabel: {
-    fontSize: verticalScale(10), // Ajuste la taille selon tes préférences
+    fontSize: verticalScale(10),
     fontWeight: "500",
-    marginTop: verticalScale(4), // Espacement entre l'icône et le texte
+    marginTop: verticalScale(4),
     textAlign: "center",
   },
 });

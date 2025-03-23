@@ -120,6 +120,3 @@ export function SessionProvider({ children }: PropsWithChildren) {
     </AuthContext.Provider>
   );
 }
-
-const { user } = useSession();
-console.log("User state:", user);

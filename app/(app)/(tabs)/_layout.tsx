@@ -1,13 +1,13 @@
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import React from "react";
-import { router, Tabs } from "expo-router";
+import { Tabs } from "expo-router";
 import CustomTabs from "@/components/CustomTabs";
-import { colors } from "@/constants/theme";
-import * as Icons from "phosphor-react-native";
 
 const TabsLayout = () => {
   return (
-    <Tabs tabBar={CustomTabs} screenOptions={{ headerShown: true }}>
+    <Tabs
+      tabBar={(props) => <CustomTabs {...props} />}
+      screenOptions={{ headerShown: true, tabBarHideOnKeyboard: true }}
+    >
       <Tabs.Screen
         name="index"
         options={{
@@ -41,10 +41,3 @@ const TabsLayout = () => {
 };
 
 export default TabsLayout;
-
-const styles = StyleSheet.create({
-  headerIcon: {
-    padding: 10,
-    marginHorizontal: 10,
-  },
-});

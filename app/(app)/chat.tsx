@@ -2,139 +2,300 @@ import {
   StyleSheet,
   Text,
   View,
-  TextInput,
-  FlatList,
   TouchableOpacity,
   Image,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  TextInput,
 } from "react-native";
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { useLocalSearchParams, router } from "expo-router";
-import { ArrowLeft, PaperPlaneRight, Smiley } from "phosphor-react-native";
+import { ArrowLeft } from "phosphor-react-native";
 import { colors } from "@/constants/theme";
 import { SafeAreaView } from "react-native-safe-area-context";
-
-interface Message {
-  id: string;
-  text: string;
-  sender: "me" | "friend";
-  timestamp: number;
-}
+import WebSocketService from "@/services/websocket";
+import { Message, Conversation, User } from "@/types";
+import {
+  getConversationMessages,
+  getOrCreateConversation,
+} from "@/services/fetchData";
+import { useSession } from "@/context/AuthContext";
+import MessageTypingAnimation from "@/components/MessageTypingAnimation";
+import { FlashList } from "@shopify/flash-list";
+import * as ImagePicker from "expo-image-picker";
+import MessageInput from "@/components/MessageInput";
+import MessageContainer from "@/components/MessageContainer";
+import MessageVocal from "@/components/MessageVocal";
 
 const ChatScreen = () => {
-  const { friendId, friendName } = useLocalSearchParams();
-  const [message, setMessage] = useState("");
+  const params = useLocalSearchParams();
+  const id = params.id as string;
+  const first_name = params.first_name as string;
+  const last_name = params.last_name as string;
+  const avatar_url = params.avatar_url as string;
+  const status = params.status === "true";
+  const [conversation, setConversation] = useState<Conversation | null>(null);
+  const messageInputRef = useRef<TextInput>(null);
+
   const [messages, setMessages] = useState<Message[]>([]);
+  const [isConnected, setIsConnected] = useState(false);
+  const wsRef = useRef<WebSocketService | null>(null);
+  const flatListRef = useRef<FlashList<any>>(null);
+  const [loading, setLoading] = useState(true);
+  const { session } = useSession();
+  const [authError, setAuthError] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
-  const [isOnline, setIsOnline] = useState(true);
-  const flatListRef = useRef<FlatList>(null);
-  const [typingDots, setTypingDots] = useState(".");
+  const [peerIsTyping, setPeerIsTyping] = useState(false);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [isButtonDisabled, setIsButtonDisabled] = useState(true);
+  const [cameraPermission, requestCameraPermission] =
+    ImagePicker.useCameraPermissions();
+  const [mediaLibraryPermission, requestMediaLibraryPermission] =
+    ImagePicker.useMediaLibraryPermissions();
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [messageText, setMessageText] = useState("");
 
-  // Simuler des messages existants
-  useEffect(() => {
-    // Dans une application réelle, vous chargeriez les messages depuis une API
-    const mockMessages: Message[] = [
-      {
-        id: "1",
-        text: "Bonjour !",
-        sender: "friend",
-        timestamp: Date.now() - 3600000,
-      },
-      {
-        id: "2",
-        text: "Salut, comment ça va ?",
-        sender: "me",
-        timestamp: Date.now() - 3540000,
-      },
-      {
-        id: "3",
-        text: "Très bien, merci ! Et toi ?",
-        sender: "friend",
-        timestamp: Date.now() - 3480000,
-      },
-      {
-        id: "4",
-        text: "Super bien aussi. Tu fais quoi aujourd'hui ?",
-        sender: "me",
-        timestamp: Date.now() - 60000,
-      },
-    ];
-    setMessages(mockMessages);
-  }, [friendId]);
+  const fetchPreviousMessages = async () => {
+    setLoading(true);
+    try {
+      // Obtenir ou créer la conversation
+      const conv = await getOrCreateConversation(id as string);
+      setConversation(conv);
 
-  // Simuler un effet "est en train d'écrire"
-  useEffect(() => {
-    const typingTimeout = setTimeout(() => {
-      if (isTyping) {
-        setIsTyping(false);
-        // Simuler une réponse
-        const newMessage: Message = {
-          id: (messages.length + 1).toString(),
-          text: "Oui, je suis disponible cet après-midi !",
-          sender: "friend",
-          timestamp: Date.now(),
-        };
-        setMessages((prev) => [...prev, newMessage]);
+      // Charger les messages
+      if (conv && conv.id) {
+        const msgs = await getConversationMessages(conv.id);
+        setMessages(msgs);
       }
-    }, 3000);
+    } catch (error) {
+      console.error("Erreur lors du chargement de la conversation :", error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    return () => clearTimeout(typingTimeout);
-  }, [isTyping]);
-
-  // Ajouter cet effet pour animer les points
   useEffect(() => {
-    if (!isTyping) return;
+    fetchPreviousMessages();
+  }, [id]);
 
-    const dotsInterval = setInterval(() => {
-      setTypingDots((prev) => {
-        if (prev === ".") return "..";
-        if (prev === "..") return "...";
-        return ".";
+  useEffect(() => {
+    if (!session?.access) {
+      console.error("Pas de token d'authentification disponible");
+      return;
+    }
+
+    if (conversation?.id) {
+      const wsUrl = `ws://192.168.1.77:8000/ws/chat/${conversation.id}/?token=${session.access}`;
+      console.log("Connexion WebSocket avec URL:", wsUrl);
+
+      wsRef.current = new WebSocketService(wsUrl);
+      wsRef.current.setOnOpenCallback(() => {
+        setIsConnected(true);
+        console.log("WebSocket connecté");
       });
-    }, 500);
 
-    return () => clearInterval(dotsInterval);
-  }, [isTyping]);
+      wsRef.current.setOnCloseCallback(() => {
+        setIsConnected(false);
+        console.log("WebSocket déconnecté");
+      });
 
-  const sendMessage = () => {
-    if (message.trim() === "") return;
+      wsRef.current.setOnMessageCallback((data) => {
+        const parsedData = JSON.parse(data);
 
-    // Ajouter notre message
-    const newMessage: Message = {
-      id: (messages.length + 1).toString(),
-      text: message,
-      sender: "me",
-      timestamp: Date.now(),
-    };
+        // Gérer les différents types de messages
+        if (parsedData.type === "typing_status") {
+          setPeerIsTyping(parsedData.is_typing);
 
-    setMessages((prev) => [...prev, newMessage]);
-    setMessage("");
+          return;
+        }
 
-    // Simuler que l'ami est en train d'écrire
-    setTimeout(() => setIsTyping(true), 1000);
-  };
+        // Gérer les messages normaux (code existant)
+        const newMessage: Message = {
+          id: Date.now().toString(),
+          conversation: conversation.id,
+          sender: conversation.participants.find(
+            (p) => p.id === parsedData.sender_id
+          ) as User,
+          content: parsedData.message,
+          timestamp: parsedData.timestamp,
+          is_read: false,
+        };
 
-  const formatTime = (timestamp: number) => {
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString("fr-FR", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
+        setMessages((prev) => [...prev, newMessage]);
+      });
 
-  const renderMessage = ({ item }: { item: Message }) => (
-    <View
-      style={[
-        styles.messageContainer,
-        item.sender === "me" ? styles.myMessage : styles.friendMessage,
-      ]}
-    >
-      <Text style={styles.messageText}>{item.text}</Text>
-      <Text style={styles.messageTime}>{formatTime(item.timestamp)}</Text>
-    </View>
+      wsRef.current.connect();
+
+      return () => {
+        wsRef.current?.disconnect();
+      };
+    }
+  }, [conversation, session?.access]);
+
+  // Fonction pour envoyer l'état de saisie, maintenant statique
+  const sendTypingStatus = useCallback(
+    (typing: boolean) => {
+      if (isConnected && wsRef.current) {
+        wsRef.current.sendMessage(
+          JSON.stringify({
+            type: "typing_status",
+            is_typing: typing,
+          })
+        );
+      }
+    },
+    [isConnected] // Dépend uniquement de isConnected
   );
+
+  // Gérer le changement du texte de message
+  const handleMessageChange = useCallback(
+    (text: string) => {
+      // Stocker le texte dans l'état
+      setMessageText(text);
+
+      const shouldDisable = text.trim() === "";
+      if (shouldDisable !== isButtonDisabled) {
+        setIsButtonDisabled(shouldDisable);
+      }
+
+      if (!isTyping) {
+        setIsTyping(true);
+        sendTypingStatus(true);
+      }
+
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+
+      typingTimeoutRef.current = setTimeout(() => {
+        setIsTyping(false);
+        sendTypingStatus(false);
+      }, 2000);
+    },
+    [isTyping, isButtonDisabled, sendTypingStatus]
+  );
+
+  const sendMessage = useCallback(() => {
+    const trimmedMessage = messageText.trim();
+    if (trimmedMessage === "") return;
+
+    setIsTyping(false);
+    sendTypingStatus(false);
+
+    wsRef.current?.sendMessage(
+      JSON.stringify({
+        message: trimmedMessage,
+      })
+    );
+
+    // Réinitialiser le texte
+    setMessageText("");
+    setIsButtonDisabled(true);
+  }, [messageText, sendTypingStatus]);
+
+  console.log("RENDU");
+
+  // Fonction pour prendre une photo avec la caméra
+  const takePicture = async () => {
+    // Vérifier les permissions
+    if (!cameraPermission?.granted) {
+      const permissionResult = await requestCameraPermission();
+      if (!permissionResult.granted) {
+        alert(
+          "Vous devez autoriser l'accès à la caméra pour prendre des photos"
+        );
+        return;
+      }
+    }
+
+    // Lancer la caméra
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: "images",
+      allowsEditing: false,
+      aspect: [4, 3],
+      quality: 1,
+    });
+
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      // Ici vous pouvez traiter l'image sélectionnée
+      console.log("Photo prise:", result.assets[0].uri);
+
+      // Par exemple, vous pourriez vouloir envoyer l'image via WebSocket
+      if (isConnected && wsRef.current) {
+        // Implémentez ici la logique pour envoyer l'image
+        // Cela dépendra de votre backend
+        // Par exemple:
+        // wsRef.current.sendMessage(JSON.stringify({
+        //   type: "image",
+        //   image_uri: result.assets[0].uri
+        // }));
+      }
+    }
+  };
+
+  // Fonction pour sélectionner une image depuis la galerie
+  const pickImage = async () => {
+    // Vérifier les permissions
+    if (!mediaLibraryPermission?.granted) {
+      const permissionResult = await requestMediaLibraryPermission();
+      if (!permissionResult.granted) {
+        alert(
+          "Vous devez autoriser l'accès à la galerie pour sélectionner des médias"
+        );
+        return;
+      }
+    }
+
+    // Lancer la galerie
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: "images", // Permet de sélectionner des images et des vidéos
+      allowsEditing: false,
+      allowsMultipleSelection: true, // Pour permettre la sélection multiple
+      selectionLimit: 5, // Limite à 5 médias maximum
+      quality: 1,
+    });
+
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      // Afficher les médias sélectionnés dans la console
+      console.log("Médias sélectionnés:", result.assets);
+
+      // Ici vous pourriez implémenter la logique pour afficher un aperçu
+      // ou pour préparer l'envoi des médias
+    }
+  };
+
+  // Gérer la fin de l'enregistrement
+  const handleStopRecording = useCallback(
+    (uri: string | null) => {
+      setIsRecording(false);
+
+      if (uri) {
+        console.log("URI de l'enregistrement:", uri);
+        // Ici vous pouvez traiter l'audio (l'envoyer via WebSocket, etc.)
+
+        // Si vous voulez envoyer l'audio via WebSocket:
+        // if (isConnected && wsRef.current) {
+        //   wsRef.current.sendMessage(
+        //     JSON.stringify({
+        //       type: "audio",
+        //       audio_uri: uri
+        //     })
+        //   );
+        // }
+      }
+    },
+    [isConnected]
+  );
+
+  // Toggle enregistrement - version simplifiée
+  const handleRecordingPress = useCallback(() => {
+    if (isRecording) {
+      // Ne fait rien ici, car l'arrêt est géré par le composant MessageVocal
+    } else {
+      setIsRecording(true);
+    }
+  }, [isRecording]);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -149,38 +310,61 @@ const ChatScreen = () => {
         <View style={styles.headerInfo}>
           <Image
             source={{
-              uri: `https://randomuser.me/api/portraits/${
-                Math.random() > 0.5 ? "women" : "men"
-              }/${Math.floor(Math.random() * 100)}.jpg`,
+              uri: avatar_url,
             }}
             style={styles.avatar}
           />
           <View>
-            <Text style={styles.headerName}>{friendName}</Text>
-            <Text style={styles.headerStatus}>
-              {isOnline ? "En ligne" : "Hors ligne"}
+            <Text style={styles.headerName}>
+              {first_name} {last_name}
             </Text>
+          </View>
+          <View style={styles.statusIndicator}>
+            <View
+              style={[
+                styles.statusDot,
+                {
+                  backgroundColor: status ? colors.green : colors.neutral400,
+                },
+              ]}
+            />
           </View>
         </View>
       </View>
 
-      {/* Zone des messages */}
-      <FlatList
-        ref={flatListRef}
-        data={messages}
-        renderItem={renderMessage}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.messagesContainer}
-        onContentSizeChange={() =>
-          flatListRef.current?.scrollToEnd({ animated: true })
-        }
-        onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
-      />
-
-      {/* Indicateur "est en train d'écrire" - remplacé par trois points */}
-      {isTyping && (
-        <View style={styles.typingContainer}>
-          <Text style={styles.typingText}>...</Text>
+      {/* Zone des messages avec indicateur de chargement */}
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colors.neutral800} />
+        </View>
+      ) : (
+        <View style={{ flex: 1 }}>
+          <FlashList
+            ref={flatListRef}
+            data={[...messages].reverse()}
+            inverted={true}
+            renderItem={({ item, index }) => (
+              <MessageContainer
+                item={item}
+                index={messages.length - 1 - index}
+              />
+            )}
+            keyExtractor={(item) => item.id}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.messagesContainer}
+            estimatedItemSize={200}
+            automaticallyAdjustKeyboardInsets={true}
+            onEndReached={() => {
+              console.log("Charger des messages plus anciens");
+            }}
+            onEndReachedThreshold={0.1}
+          />
+          {peerIsTyping && (
+            <MessageTypingAnimation
+              dotColor={colors.neutral500}
+              backgroundColor={colors.neutral200}
+            />
+          )}
         </View>
       )}
 
@@ -189,32 +373,20 @@ const ChatScreen = () => {
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 70}
       >
-        <View style={styles.inputContainer}>
-          <TouchableOpacity style={styles.emojiButton}>
-            <Smiley size={24} color={colors.neutral600} />
-          </TouchableOpacity>
-          <TextInput
-            style={styles.textInput}
-            placeholder="Écrivez un message..."
-            value={message}
-            onChangeText={setMessage}
-            multiline
+        {isRecording ? (
+          <MessageVocal onStopRecording={handleStopRecording} />
+        ) : (
+          <MessageInput
+            messageInputRef={messageInputRef}
+            onChangeText={handleMessageChange}
+            isButtonDisabled={isButtonDisabled}
+            onSendMessage={sendMessage}
+            onTakePicture={takePicture}
+            onPickImage={pickImage}
+            onRecordPress={handleRecordingPress}
+            value={messageText}
           />
-          <TouchableOpacity
-            style={[
-              styles.sendButton,
-              message.trim() === "" ? styles.sendButtonDisabled : {},
-            ]}
-            onPress={sendMessage}
-            disabled={message.trim() === ""}
-          >
-            <PaperPlaneRight
-              size={24}
-              color={message.trim() === "" ? colors.neutral400 : colors.white}
-              weight="fill"
-            />
-          </TouchableOpacity>
-        </View>
+        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -257,79 +429,74 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.neutral500,
   },
+  statusIndicator: {
+    position: "absolute",
+    bottom: 0,
+    left: 30,
+    backgroundColor: colors.white,
+    borderRadius: 10,
+    padding: 2,
+  },
+  statusDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
   messagesContainer: {
     padding: 16,
   },
-  messageContainer: {
-    maxWidth: "80%",
-    padding: 12,
-    borderRadius: 18,
-    marginBottom: 8,
+
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
   },
-  myMessage: {
-    backgroundColor: colors.neutral100,
-    alignSelf: "flex-end",
-    borderBottomRightRadius: 4,
-  },
-  friendMessage: {
-    backgroundColor: colors.neutral200,
-    alignSelf: "flex-start",
-    borderBottomLeftRadius: 4,
-  },
-  messageText: {
-    fontSize: 16,
-    color: colors.neutral800,
-  },
-  messageTime: {
-    fontSize: 12,
-    color: colors.neutral500,
-    alignSelf: "flex-end",
-    marginTop: 4,
-  },
-  typingContainer: {
-    alignSelf: "flex-start",
-    backgroundColor: colors.neutral200,
-    borderRadius: 18,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginLeft: 16,
-    marginBottom: 8,
-  },
-  typingText: {
-    fontSize: 16,
-    letterSpacing: 2,
+  loadingText: {
+    marginTop: 16,
     color: colors.neutral600,
+    fontSize: 16,
+    textAlign: "center",
   },
-  inputContainer: {
+  authErrorContainer: {
+    backgroundColor: colors.rose,
+    padding: 10,
+    alignItems: "center",
+  },
+  authErrorText: {
+    color: colors.white,
+    fontWeight: "500",
+  },
+  recordingContainer: {
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingVertical: 12,
     borderTopWidth: 1,
     borderTopColor: colors.neutral200,
     backgroundColor: colors.white,
   },
-  emojiButton: {
-    padding: 8,
+  recordingIndicator: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: colors.rose,
+    marginRight: 8,
   },
-  textInput: {
+  recordingText: {
     flex: 1,
-    backgroundColor: colors.neutral100,
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    maxHeight: 100,
-    marginHorizontal: 8,
+    color: colors.neutral800,
+    fontSize: 14,
   },
-  sendButton: {
-    backgroundColor: colors.neutral800,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  sendButtonDisabled: {
+  stopRecordingButton: {
     backgroundColor: colors.neutral200,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  stopRecordingButtonText: {
+    color: colors.neutral800,
+    fontSize: 12,
+    fontWeight: "600",
   },
 });

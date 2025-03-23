@@ -6,120 +6,77 @@ import {
   FlatList,
   TouchableOpacity,
   Image,
+  RefreshControl,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
-import React, { useState } from "react";
-import { router } from "expo-router";
-import { MagnifyingGlass, User, ChatCircle, Plus } from "phosphor-react-native";
+import React, { useEffect, useState } from "react";
+import { MagnifyingGlass, ChatCircle, Plus } from "phosphor-react-native";
 import { colors } from "@/constants/theme";
-
-// Types pour nos données
-type FriendStatus = "connected" | "pending";
-
-interface Friend {
-  id: string;
-  name: string;
-  avatar: string;
-  status: "online" | "offline";
-  connectionStatus: FriendStatus;
-}
-
+import { useRouter } from "expo-router";
+import { getFriendsData } from "@/services/fetchData";
+import { User } from "@/types";
 const FriendsScreen = () => {
   const [searchQuery, setSearchQuery] = useState("");
+  const [friends, setFriends] = useState<User[]>([]);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const router = useRouter();
 
-  // Données fictives pour l'exemple
-  const [friends, setFriends] = useState<Friend[]>([
-    {
-      id: "1",
-      name: "Sophie Martin",
-      avatar: "https://randomuser.me/api/portraits/women/44.jpg",
-      status: "online",
-      connectionStatus: "connected",
-    },
-    {
-      id: "2",
-      name: "Thomas Dubois",
-      avatar: "https://randomuser.me/api/portraits/men/32.jpg",
-      status: "offline",
-      connectionStatus: "connected",
-    },
-    {
-      id: "3",
-      name: "Julie Bernard",
-      avatar: "https://randomuser.me/api/portraits/women/68.jpg",
-      status: "online",
-      connectionStatus: "connected",
-    },
-    {
-      id: "4",
-      name: "Marc Petit",
-      avatar: "https://randomuser.me/api/portraits/men/75.jpg",
-      status: "offline",
-      connectionStatus: "pending",
-    },
-    {
-      id: "5",
-      name: "Laura Roux",
-      avatar: "https://randomuser.me/api/portraits/women/17.jpg",
-      status: "online",
-      connectionStatus: "pending",
-    },
-  ]);
-
-  const filteredFriends = friends.filter((friend) =>
-    friend.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  const connectedFriends = filteredFriends.filter(
-    (friend) => friend.connectionStatus === "connected"
-  );
-  const pendingFriends = filteredFriends.filter(
-    (friend) => friend.connectionStatus === "pending"
-  );
-
-  const handleFriendAction = (friend: Friend) => {
-    if (friend.connectionStatus === "connected") {
-      // Naviguer vers le chat
-      router.push({
-        pathname: "/chat",
-        params: { friendId: friend.id, friendName: friend.name },
-      });
-    } else {
-      // Envoyer une demande de connexion
-      // Logique à implémenter plus tard
-      alert(`Demande de connexion envoyée à ${friend.name}`);
-
-      // Mise à jour de l'UI pour refléter l'envoi de la demande
-      const updatedFriends = friends.map((f) =>
-        f.id === friend.id
-          ? { ...f, connectionStatus: "pending" as FriendStatus }
-          : f
+  const fetchFriends = async () => {
+    await getFriendsData()
+      .then((data) => setFriends(data))
+      .catch((err) =>
+        console.error("Erreur lors du chargement des amis :", err)
       );
-      setFriends(updatedFriends);
-    }
   };
 
-  const renderFriendItem = ({ item }: { item: Friend }) => (
+  useEffect(() => {
+    fetchFriends();
+  }, []);
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await fetchFriends();
+    setIsRefreshing(false);
+  };
+
+  const handleChatPress = (friend: User) => {
+    router.push({
+      pathname: "/chat",
+      params: {
+        id: friend.id,
+        first_name: friend.first_name,
+        last_name: friend.last_name,
+        avatar_url: friend.avatar_url,
+        status: friend.status ? "true" : "false",
+      },
+    });
+  };
+
+  const renderFriendItem = ({ item }: { item: User }) => (
     <TouchableOpacity
       style={styles.friendCard}
-      onPress={() => handleFriendAction(item)}
+      onPress={() => handleChatPress(item)}
     >
       <View style={styles.friendInfo}>
-        <Image source={{ uri: item.avatar }} style={styles.avatar} />
+        <Image source={{ uri: item.avatar_url }} style={styles.avatar} />
         <View style={styles.statusIndicator}>
           <View
             style={[
               styles.statusDot,
               {
-                backgroundColor:
-                  item.status === "online" ? colors.green : colors.neutral400,
+                backgroundColor: item.status ? colors.green : colors.neutral400,
               },
             ]}
           />
         </View>
         <View style={styles.friendDetails}>
-          <Text style={styles.friendName}>{item.name}</Text>
+          <Text style={styles.friendName}>
+            {item.first_name} {item.last_name}
+          </Text>
+          <Text style={styles.friendEmail}>{item.email}</Text>
           <Text style={styles.statusText}>
-            {item.status === "online" ? "En ligne" : "Hors ligne"}
+            {item.status ? "En ligne" : "Hors ligne"}
           </Text>
         </View>
       </View>
@@ -128,80 +85,69 @@ const FriendsScreen = () => {
         style={[
           styles.actionButton,
           {
-            backgroundColor:
-              item.connectionStatus === "connected"
-                ? colors.neutral100
-                : colors.neutral200,
+            backgroundColor: colors.neutral200,
           },
         ]}
-        onPress={() => handleFriendAction(item)}
+        onPress={() => {
+          handleChatPress(item);
+        }}
       >
-        {item.connectionStatus === "connected" ? (
-          <ChatCircle size={20} color={colors.neutral800} weight="fill" />
-        ) : (
-          <Plus size={20} color={colors.neutral800} weight="bold" />
-        )}
+        <ChatCircle size={20} color={colors.neutral800} weight="fill" />
       </TouchableOpacity>
     </TouchableOpacity>
   );
 
   return (
-    <View style={styles.container}>
-      {/* Barre de recherche */}
-      <View style={styles.searchContainer}>
-        <MagnifyingGlass
-          size={20}
-          color={colors.neutral400}
-          style={styles.searchIcon}
-        />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Rechercher un ami..."
-          value={searchQuery}
-          onChangeText={setSearchQuery}
+    <KeyboardAvoidingView
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      style={{ flex: 1, backgroundColor: colors.white }}
+      keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
+    >
+      <View style={styles.contentContainer}>
+        {/* Barre de recherche */}
+        <View style={styles.searchContainer}>
+          <MagnifyingGlass
+            size={20}
+            color={colors.neutral400}
+            style={styles.searchIcon}
+          />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Rechercher un ami..."
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+        </View>
+
+        {/* Section amis connectés */}
+        <Text style={styles.sectionTitle}>Mes amis</Text>
+
+        <FlatList
+          data={friends}
+          renderItem={renderFriendItem}
+          keyExtractor={(item) => item.id}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={handleRefresh}
+              colors={[colors.neutral800]}
+              tintColor={colors.neutral800}
+            />
+          }
         />
       </View>
-
-      {/* Section amis connectés */}
-      <Text style={styles.sectionTitle}>Mes amis</Text>
-      {connectedFriends.length > 0 ? (
-        <FlatList
-          data={connectedFriends}
-          renderItem={renderFriendItem}
-          keyExtractor={(item) => item.id}
-          style={styles.friendsList}
-        />
-      ) : (
-        <Text style={styles.emptyListText}>
-          Aucun ami connecté pour le moment
-        </Text>
-      )}
-
-      {/* Section suggestions */}
-      <Text style={styles.sectionTitle}>Suggestions</Text>
-      {pendingFriends.length > 0 ? (
-        <FlatList
-          data={pendingFriends}
-          renderItem={renderFriendItem}
-          keyExtractor={(item) => item.id}
-          style={styles.friendsList}
-        />
-      ) : (
-        <Text style={styles.emptyListText}>
-          Aucune suggestion pour le moment
-        </Text>
-      )}
-    </View>
+    </KeyboardAvoidingView>
   );
 };
 
 export default FriendsScreen;
 
 const styles = StyleSheet.create({
-  container: {
+  contentContainer: {
     flex: 1,
-    backgroundColor: colors.white,
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingTop: 16,
   },
   searchContainer: {
     flexDirection: "row",
@@ -226,9 +172,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     color: colors.neutral800,
   },
-  friendsList: {
-    marginBottom: 20,
-  },
+
   friendCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -255,8 +199,8 @@ const styles = StyleSheet.create({
   },
   statusIndicator: {
     position: "absolute",
-    bottom: 0,
-    left: 36,
+    bottom: 5,
+    left: 35,
     backgroundColor: colors.white,
     borderRadius: 10,
     padding: 2,
@@ -274,10 +218,14 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     color: colors.neutral800,
   },
+  friendEmail: {
+    fontSize: 14,
+    color: colors.neutral400,
+  },
   statusText: {
     fontSize: 14,
     color: colors.neutral400,
-    marginTop: 2,
+    marginTop: 4,
   },
   actionButton: {
     width: 40,
